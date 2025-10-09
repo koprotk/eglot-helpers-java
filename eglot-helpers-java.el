@@ -1,6 +1,6 @@
 ;;; eglot-helper-java.el --- Helper functions for Java with Eglot -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024 Daniel Muñoz
+;; Copyright (C) 2025 Daniel Muñoz
 
 ;; Version: 0.1
 ;; Author: Daniel Muñoz <demunoz2@uc.cl>
