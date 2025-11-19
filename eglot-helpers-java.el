@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2025 Daniel Muñoz
 
-;; Version: 0.1
+;; Version: 0.2
 ;; Author: Daniel Muñoz <demunoz2@uc.cl>
 ;; Maintainer: Daniel Muñoz <demunoz2@uc.cl>
 ;; URL: https://github.com/koprotk/eglot-helper-java
@@ -82,6 +82,13 @@
      
      (t nil))))
 
+(defvar fqcn-custom (lambda () (defvar fqcn-custom #'(get-fqnm-at-point nil))))
+(defvar fqmn-custom (lambda () (defvar fqcn-custom #'(get-fqnm-at-point t))))
+
+;;If you want to use eglot-java functions for methods you should replace (get-fqnm-at-point t) with (eglot-java--find-nearest-method-at-point)
+;;If you want to use eglot-java functions for classes you should replace (get-fqnm-at-point nil) with (eglot-java--find-nearest-method-at-point)
+;;Remember to add a (require eglot-java)
+
 (defun run-mvn-test-class ()
   "Run the mvn test class at point"
   (interactive)
@@ -120,6 +127,14 @@
                  (get-fqnm-at-point t))))
     (message "Not inside a know project."))
   )
+
+(defun gud-jdb-break ()
+  "Create breakpoint for jdb"
+    (interactive)
+    (if-let (class (eglot-java--class-fqcn))
+        (gud-call (concat "stop at " class ":%l") 1)
+      (message "Could not determine class name."))
+    )
 
 (provide 'eglot-helper-java)
 ;;; eglot-helper-java.el ends here
