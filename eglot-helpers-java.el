@@ -7,7 +7,6 @@
 ;; Maintainer: Daniel Muñoz <demunoz2@uc.cl>
 ;; URL: https://github.com/koprotk/eglot-helper-java
 ;; Keywords: java, eglot, convenience, languages
-;; URL: https://github.com/yourusername/eglot-helper-java
 ;; Package-Requires: ((emacs "29.1") (eglot "1.9"))
 
 ;; This program is free software; you can redistribute it and/or modify
