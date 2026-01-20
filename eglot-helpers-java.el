@@ -1,4 +1,4 @@
-;;; eglot-helpers-java.el --- Helper functions for Java with Eglot -*- lexical-binding:  t; -*-
+;;; eglot-helpers-java.el --- Helper functions for Java with Eglot -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2025 Daniel Muñoz
 
@@ -20,25 +20,17 @@
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with this program.   If not, see <http://www.gnu.org/licenses/>. 
+;; along with this program.   If not, see <http://www.gnu.org/licenses/>.
 
-;;; Commentary: 
+;;; Commentary:
 
-;; This package provides helper functions for working with Java in Eglot.
-;; It allows running Maven tests for the class or method at point,
-;; building projects, and debugging tests. 
-;;
-;; Available commands:
-;; - `run-mvn-test-class': Run Maven test for the class at point
-;; - `run-mvn-test-method': Run Maven test for the method at point
-;; - `build-mvn-project-skiptests': Build Maven project skipping tests
-;; - `debug-mvn-test-method': Run test at point in debug mode
-;; - `gud-jdb-break': Create a jdb breakpoint at current line
+;; This package provides helper functions for working with Java in Eglot. 
 
 ;;; Code:
 
 (require 'eglot)
 (require 'cl-lib)
+(require 'gud)
 
 (defun get-fqnm-at-point (with-method)
   "Get the fully qualified name of the method or class at point. 
@@ -48,7 +40,6 @@ If WITH-METHOD is non-nil, include the method name."
          (class (substring-no-properties (car (car (cdr imenu-list)))))
          (methods (cdr (car (cdr imenu-list))))
          (method-found nil))
-    ;; Search for the method containing point
     (cl-dolist (obj methods)
       (let* ((name (car obj))
              (kind (get-text-property 0 'breadcrumb-kind name))
@@ -104,7 +95,7 @@ If WITH-METHOD is non-nil, include the method name."
   (if-let ((project (project-current)))
       (let ((default-directory (project-root project)))
         (compile
-         (format "mvn -Dmaven.surefire.debug=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=8000 -Dtest=%s test"
+         (format "mvn -Dmaven.surefire. debug=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=8000 -Dtest=%s test"
                  (get-fqnm-at-point t))))
     (message "Not inside a known project.")))
 
@@ -114,8 +105,6 @@ If WITH-METHOD is non-nil, include the method name."
   (if-let ((class (get-fqnm-at-point nil)))
       (gud-call (concat "stop at " class ":%l") 1)
     (message "Could not determine class name.")))
-
-;;;###autoload(with-eval-after-load 'eglot (require 'eglot-helpers-java))
 
 (provide 'eglot-helpers-java)
 ;;; eglot-helpers-java.el ends here
