@@ -1,11 +1,11 @@
-;;; eglot-helper-java.el --- Helper functions for Java with Eglot -*- lexical-binding: t; -*-
+;;; eglot-helpers-java.el --- Helper functions for Java with Eglot -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2025 Daniel Muñoz
 
 ;; Version: 0.2
 ;; Author: Daniel Muñoz <demunoz2@uc.cl>
 ;; Maintainer: Daniel Muñoz <demunoz2@uc.cl>
-;; URL: https://github.com/koprotk/eglot-helper-java
+;; URL: https://github.com/koprotk/eglot-java-helpers
 ;; Keywords: java, eglot, convenience, languages
 ;; Package-Requires: ((emacs "29.1") (eglot "1.9"))
 
@@ -33,9 +33,9 @@
 
 (defun get-fqnm-at-point-beta (with-method)
   "Get the fully qualified name of the class at point."
-  (let* ((package (substring-no-properties (car (car (eglot-imenu)))))
-         (class  (substring-no-properties (car (car (cdr (eglot-imenu))))))
-         (method (replace-regexp-in-string "[()]" "" (substring-no-properties (car (car (cdr (car (cdr (eglot-imenu))))))))))
+  (let* ((package (substring-no-properties (car (car (eglot-imenu))))
+         (class  (substring-no-properties (car (car (cdr (eglot-imenu)))))
+         (method (replace-regexp-in-string "[()]" "" (substring-no-properties (car (car (cdr (car (cdr (eglot-imenu)))))))))
     (if with-method
         (if (and package class method)
             (concat package "." class "#" method)
@@ -135,5 +135,5 @@
       (message "Could not determine class name."))
     )
 
-(provide 'eglot-helper-java)
-;;; eglot-helper-java.el ends here
+(provide 'eglot-helpers-java)
+;;; eglot-helpers-java.el ends here
