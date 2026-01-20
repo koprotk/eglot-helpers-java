@@ -1,4 +1,4 @@
-;;; eglot-helpers-java.el --- Helper functions for Java with Eglot -*- lexical-binding: t; -*-
+;;; eglot-helpers-java. el --- Helper functions for Java with Eglot -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2025 Daniel Muñoz
 
@@ -24,118 +24,101 @@
 
 ;;; Commentary:
 
-;; This package provides helper functions for working with Java in Eglot.
-;; The function:  
+;; This package provides helper functions for working with Java in Eglot. 
+;; It allows running Maven tests for the class or method at point,
+;; building projects, and debugging tests. 
+;;
+;; Available commands:
+;; - `run-mvn-test-class': Run Maven test for the class at point
+;; - `run-mvn-test-method':  Run Maven test for the method at point
+;; - `build-mvn-project-skiptests': Build Maven project skipping tests
+;; - `debug-mvn-test-method': Run test at point in debug mode
+;; - `gud-jdb-break': Create a jdb breakpoint at current line
 
 ;;; Code:
 
 (require 'eglot)
-
-(defun get-fqnm-at-point-beta (with-method)
-  "Get the fully qualified name of the class at point."
-  (let* ((package (substring-no-properties (car (car (eglot-imenu))))
-         (class  (substring-no-properties (car (car (cdr (eglot-imenu)))))
-         (method (replace-regexp-in-string "[()]" "" (substring-no-properties (car (car (cdr (car (cdr (eglot-imenu)))))))))
-    (if with-method
-        (if (and package class method)
-            (concat package "." class "#" method)
-          (concat package "." class))
-      (concat package "." class)
-      )))
+(require 'cl-lib)
 
 (defun get-fqnm-at-point (with-method)
-  "Obtiene el nombre cualificado del método o clase en el punto."
-  (let* (;; --- A. PREPARACIÓN ---
-         (imenu-list (eglot-imenu))
+  "Get the fully qualified name of the method or class at point. 
+If WITH-METHOD is non-nil, include the method name."
+  (let* ((imenu-list (eglot-imenu))
          (package (substring-no-properties (car (car imenu-list))))
          (class (substring-no-properties (car (car (cdr imenu-list)))))
-         (methods (cdr (car (cdr imenu-list)))) 
+         (methods (cdr (car (cdr imenu-list))))
          (method-found nil))
 
-    ;; --- B. BÚSQUEDA ---
-    ;; Usaremos un bucle para encontrar tanto la clase como el método que contienen el punto.
-    ;; --- C. BÚSQUEDA: Tu bucle, modificado para guardar el resultado ---
-    (dolist (obj methods)
-      ;; Extraemos los datos de cada objeto, como ya haces
-      (let* ((name   (car obj))
-             (kind   (get-text-property 0 'breadcrumb-kind name))
+    ;; Search for the method containing point
+    (cl-dolist (obj methods)
+      (let* ((name (car obj))
+             (kind (get-text-property 0 'breadcrumb-kind name))
              (region (get-text-property 0 'breadcrumb-region name)))
-        
-        ;; Solo continuamos si la región existe y el tipo es "Method"
+
         (when (and region (string= kind "Method"))
           (let ((start (car region))
-                (end   (cdr region)))
-            ;; Si el punto está en el rango, ¡hemos encontrado nuestro método!
+                (end (cdr region)))
             (when (and (>= (point) start) (<= (point) end))
-              ;; Guardamos el nombre limpio en nuestra variable y salimos del bucle.
               (setq method-found (replace-regexp-in-string "[()]" "" (substring-no-properties name)))
-              ;; (cl-return) detiene el bucle dolist/cl-loop para no seguir buscando inútilmente
-              ;; (esto es opcional pero más eficiente)
-              )))))
+              (cl-return))))))
+
     (cond
      ((and with-method method-found)
       (concat package "." class "#" method-found))
-     
      ((and package class)
       (concat package "." class))
-     
      (t nil))))
 
-(defvar fqcn-custom (lambda () (defvar fqcn-custom #'(get-fqnm-at-point nil))))
-(defvar fqmn-custom (lambda () (defvar fqcn-custom #'(get-fqnm-at-point t))))
+(defun eglot-helpers-java-get-fqcn ()
+  "Get the fully qualified class name at point."
+  (get-fqnm-at-point nil))
 
-;;If you want to use eglot-java functions for methods you should replace (get-fqnm-at-point t) with (eglot-java--find-nearest-method-at-point)
-;;If you want to use eglot-java functions for classes you should replace (get-fqnm-at-point nil) with (eglot-java--find-nearest-method-at-point)
-;;Remember to add a (require eglot-java)
+(defun eglot-helpers-java-get-fqmn ()
+  "Get the fully qualified method name at point."
+  (get-fqnm-at-point t))
 
 (defun run-mvn-test-class ()
-  "Run the mvn test class at point"
+  "Run the Maven test for the class at point."
   (interactive)
-  (if-let (project (project-current))
+  (if-let ((project (project-current)))
       (let ((default-directory (project-root project)))
         (compile (format "mvn -Dtest=%s test" (get-fqnm-at-point nil))))
-    (message "Not inside a know project.")))
-
+    (message "Not inside a known project.")))
 
 (defun run-mvn-test-method ()
-  "Run the mvn test at point"
+  "Run the Maven test for the method at point."
   (interactive)
-  (if-let (project (project-current))
+  (if-let ((project (project-current)))
       (let ((default-directory (project-root project)))
         (compile (format "mvn -Dtest=%s test" (get-fqnm-at-point t))))
-    (message "Not inside a know project."))
-  )
+    (message "Not inside a known project.")))
 
 (defun build-mvn-project-skiptests ()
-  "Run the mvn test at point"
+  "Build the Maven project, skipping tests."
   (interactive)
-  (if-let (project (project-current))
+  (if-let ((project (project-current)))
       (let ((default-directory (project-root project)))
-        (compile "mvn clean package -DskipTests -U")
-        (message "Not inside a know project."))
-    )
-  )
+        (compile "mvn clean package -DskipTests -U"))
+    (message "Not inside a known project.")))
 
 (defun debug-mvn-test-method ()
-  "Run the test on debug mode"
+  "Run the test at point in debug mode."
   (interactive)
-  (if-let (project (project-current))
+  (if-let ((project (project-current)))
       (let ((default-directory (project-root project)))
         (compile
          (format "mvn -Dmaven.surefire.debug=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=8000 -Dtest=%s test"
                  (get-fqnm-at-point t))))
-    (message "Not inside a know project."))
-  )
+    (message "Not inside a known project.")))
 
 (defun gud-jdb-break ()
-  "Create breakpoint for jdb"
-    (interactive)
-    (if-let (class (eglot-java--class-fqcn))
-        (gud-call (concat "stop at " class ":%l") 1)
-      (message "Could not determine class name."))
-    )
+  "Create breakpoint for jdb at the current line."
+  (interactive)
+  (if-let ((class (get-fqnm-at-point nil)))
+      (gud-call (concat "stop at " class ":%l") 1)
+    (message "Could not determine class name.")))
 
 ;;;###autoload(with-eval-after-load 'eglot (require 'eglot-helpers-java))
 
 (provide 'eglot-helpers-java)
-;;; eglot-helpers-java.el ends here
+;;; eglot-helpers-java. el ends here
