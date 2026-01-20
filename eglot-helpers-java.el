@@ -1,4 +1,4 @@
-;;; eglot-helpers-java. el --- Helper functions for Java with Eglot -*- lexical-binding: t; -*-
+;;; eglot-helpers-java.el --- Helper functions for Java with Eglot -*- lexical-binding:  t; -*-
 
 ;; Copyright (C) 2025 Daniel Muñoz
 
@@ -20,17 +20,17 @@
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+;; along with this program.   If not, see <http://www.gnu.org/licenses/>. 
 
-;;; Commentary:
+;;; Commentary: 
 
-;; This package provides helper functions for working with Java in Eglot. 
+;; This package provides helper functions for working with Java in Eglot.
 ;; It allows running Maven tests for the class or method at point,
 ;; building projects, and debugging tests. 
 ;;
 ;; Available commands:
 ;; - `run-mvn-test-class': Run Maven test for the class at point
-;; - `run-mvn-test-method':  Run Maven test for the method at point
+;; - `run-mvn-test-method': Run Maven test for the method at point
 ;; - `build-mvn-project-skiptests': Build Maven project skipping tests
 ;; - `debug-mvn-test-method': Run test at point in debug mode
 ;; - `gud-jdb-break': Create a jdb breakpoint at current line
@@ -48,20 +48,17 @@ If WITH-METHOD is non-nil, include the method name."
          (class (substring-no-properties (car (car (cdr imenu-list)))))
          (methods (cdr (car (cdr imenu-list))))
          (method-found nil))
-
     ;; Search for the method containing point
     (cl-dolist (obj methods)
       (let* ((name (car obj))
              (kind (get-text-property 0 'breadcrumb-kind name))
              (region (get-text-property 0 'breadcrumb-region name)))
-
         (when (and region (string= kind "Method"))
           (let ((start (car region))
                 (end (cdr region)))
             (when (and (>= (point) start) (<= (point) end))
               (setq method-found (replace-regexp-in-string "[()]" "" (substring-no-properties name)))
               (cl-return))))))
-
     (cond
      ((and with-method method-found)
       (concat package "." class "#" method-found))
@@ -121,4 +118,4 @@ If WITH-METHOD is non-nil, include the method name."
 ;;;###autoload(with-eval-after-load 'eglot (require 'eglot-helpers-java))
 
 (provide 'eglot-helpers-java)
-;;; eglot-helpers-java. el ends here
+;;; eglot-helpers-java.el ends here
