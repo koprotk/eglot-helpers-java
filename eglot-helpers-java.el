@@ -135,5 +135,7 @@
       (message "Could not determine class name."))
     )
 
+;;;###autoload(with-eval-after-load 'eglot (require 'eglot-helpers-java))
+
 (provide 'eglot-helpers-java)
 ;;; eglot-helpers-java.el ends here
