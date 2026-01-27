@@ -53,6 +53,19 @@
 (require 'cl-lib)
 (require 'gud)
 
+(defgroup eglot-helpers-java nil
+  "Helper functions for Java with Eglot."
+  :group 'eglot
+  :prefix "eglot-helpers-java-")
+
+(defcustom eglot-helpers-java-lombok-jar-path nil
+  "Path to the Lombok JAR file for JDTLS.
+When set, Lombok will be enabled as a Java agent for the language server.
+Example: \"~/.m2/repository/org/projectlombok/lombok/1.18.36/lombok-1.18.36.jar\""
+  :type '(choice (const :tag "Not configured" nil)
+                 (file :tag "Path to lombok.jar"))
+  :group 'eglot-helpers-java)
+
 (defun eglot-helpers-java--get-fqnm-at-point (with-method)
   "Get the fully qualified name of the method or class at point. 
 If WITH-METHOD is non-nil, include the method name."
@@ -131,6 +144,91 @@ If WITH-METHOD is non-nil, include the method name."
   (if-let ((class (eglot-helpers-java--get-fqnm-at-point nil)))
       (gud-call (concat "stop at " class ":%l") 1)
     (message "Could not determine class name.")))
+
+
+;; JDTLS customization for Eglot
+(add-to-list 'eglot-server-programs
+               `((java-mode java-ts-mode) .
+                 ("jdtls"
+                  "-Xms2G"
+                  "-Xmx6G"
+                  "-XX:+UseZGC"
+                  "-XX:+ZGenerational"
+                  "-XX:+AlwaysPreTouch"
+                  "-XX:+UseStringDeduplication"
+                  ,@(when eglot-helpers-java-lombok-jar-path
+                      (list (concat "--jvm-arg=-javaagent:" eglot-helpers-java-lombok-jar-path)))
+                  "--add-modules=ALL-SYSTEM"
+                  "--add-opens" "java.base/java.util=ALL-UNNAMED"
+                  "--add-opens" "java.base/java.lang=ALL-UNNAMED"
+                  :initializationOptions
+                  (:extendedClientCapabilities
+                   (:classFileContentsSupport t
+                    :resolveAdditionalTextEditsSupport t
+                    :progressReportProvider t)
+                   :bundles []
+                   :settings
+                   (:java
+                    (:format
+                     (:enabled t
+                      :settings (:url "https://raw.githubusercontent.com/google/styleguide/gh-pages/eclipse-java-google-style.xml")
+                      :profile "GoogleStyle"
+                      :comments (:enabled t))
+                     :insertSpaces t
+                     :tabSize 2)
+                    :completion
+                    (:enabled t
+                     :favoriteStaticMembers ["org.junit.Assert.*"
+                                             "org.junit.Assume.*"
+                                             "org.junit.jupiter.api.Assertions.*"
+                                             "org.junit.jupiter.api.Assumptions.*"
+                                             "org.mockito.Mockito.*"
+                                             "org.mockito.ArgumentMatchers.*"
+                                             "org.mockito.Answers.*"]
+                     :filteredTypes ["com.sun.*"
+                                    "java.awt.*"
+                                    "jdk.*"
+                                    "sun.*"
+                                    "org.graalvm.*"]
+                     :importOrder ["java" "javax" "org" "com"]
+                     :guessMethodArguments t
+                     :maxResults 0
+                     :postfix (:enabled t))
+                    :signatureHelp (:enabled t :description (:enabled t))
+                    :contentProvider (:preferred "fernflower")
+                    :autobuild (:enabled t)
+                    :maven (:downloadSources t :updateSnapshots t)
+                    :implementationsCodeLens (:enabled t)
+                    :referencesCodeLens (:enabled t)
+                    :references (:includeDecompiledSources t)
+                    :inlayHints
+                    (:parameterNames (:enabled "all"))
+                    :codeGeneration
+                    (:hashCodeEquals (:useJava7Objects t :useInstanceof t)
+                     :useBlocks t
+                     :generateComments t
+                     :toString
+                     (:template "${object.className} [${member.name()}=${member.value}, ${otherMembers}]"
+                      :codeStyle "STRING_CONCATENATION"
+                      :skipNullValues :json-false
+                      :listArrayContents t
+                      :limitElements 0))
+                    :saveActions
+                    (:organizeImports t)
+                    :sources
+                    (:organizeImports
+                     (:starThreshold 99
+                      :staticStarThreshold 99))
+                    :import (:gradle (:wrapper (:enabled t))
+                             :maven (:enabled t)
+                             :exclusions ["**/node_modules/**"
+                                         "**/.metadata/**"
+                                         "**/archetype-resources/**"
+                                         "**/META-INF/maven/**"])
+                    :eclipse (:downloadSources t)
+                    :configuration
+                    (:updateBuildConfiguration "automatic"
+                     :runtimes []))))))
 
 (provide 'eglot-helpers-java)
 ;;; eglot-helpers-java.el ends here
