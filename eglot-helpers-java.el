@@ -43,7 +43,8 @@
 ;; - `eglot-helpers-java-run-mvn-test-method' - Run test for the method at point
 ;; - `eglot-helpers-java-build-mvn-project-skiptests' - Build project without tests
 ;; - `eglot-helpers-java-debug-mvn-test-method' - Debug test method with JDB
-;; - `eglot-helpers-java-gud-jdb-break' - Set JDB breakpoint at current line
+;; - `eglot-helpers-java-launch-jdb' - Attach JDB on port 8000 in another window
+;; - `eglot-helpers-java-gud-jdb-break' - Set JDB breakpoint at current line it's mimic the behaviour of the standard 'grud-break'
 ;; - `eglot-helpers-java-get-fqcn' - Get fully qualified class name
 ;; - `eglot-helpers-java-get-fqmn' - Get fully qualified method name
 
@@ -135,6 +136,25 @@ If WITH-METHOD is non-nil, include the method name."
         (compile
          (format "mvn -Dmaven.surefire.debug=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=8000 -Dtest=%s test"
                  (eglot-helpers-java--get-fqnm-at-point t))))
+    (message "Not inside a known project.")))
+
+;;;###autoload
+(defun eglot-helpers-java-launch-jdb ()
+  "Attach JDB to port 8000 with project source and class paths, opening in another window.
+Use after starting a debug session with `eglot-helpers-java-debug-mvn-test-method'."
+  (interactive)
+  (if-let ((project (project-current)))
+      (let* ((default-directory (project-root project))
+             (sourcepath (concat (project-root project) "src/main/java"
+                                 ":"
+                                 (project-root project) "src/test/java"))
+             (orig-window (selected-window))
+             (orig-buffer (current-buffer)))
+        (jdb (format "jdb -attach 8000 -sourcepath%s" sourcepath))
+        (let ((jdb-buffer (current-buffer)))
+          (switch-to-buffer orig-buffer)
+          (select-window orig-window)
+          (display-buffer jdb-buffer '(display-buffer-use-some-window (inhibit-same-window . t)))))
     (message "Not inside a known project.")))
 
 ;;;###autoload
