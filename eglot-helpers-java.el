@@ -106,7 +106,7 @@ If WITH-METHOD is non-nil, include the method name."
   (interactive)
   (if-let ((project (project-current)))
       (let ((default-directory (project-root project)))
-        (compile (format "mvn -Dtest=%s test" (eglot-helpers-java--get-fqnm-at-point nil))))
+        (compile (format "./mvnw -Dtest=%s test" (eglot-helpers-java--get-fqnm-at-point nil))))
     (message "Not inside a known project.")))
 
 ;;;###autoload
@@ -115,7 +115,7 @@ If WITH-METHOD is non-nil, include the method name."
   (interactive)
   (if-let ((project (project-current)))
       (let ((default-directory (project-root project)))
-        (compile (format "mvn -Dtest=%s test" (eglot-helpers-java--get-fqnm-at-point t))))
+        (compile (format "./mvnw -Dtest=%s test" (eglot-helpers-java--get-fqnm-at-point t))))
     (message "Not inside a known project.")))
 
 ;;;###autoload
@@ -124,7 +124,7 @@ If WITH-METHOD is non-nil, include the method name."
   (interactive)
   (if-let ((project (project-current)))
       (let ((default-directory (project-root project)))
-        (compile "mvn clean package -DskipTests -U"))
+        (compile "./mvnw clean package -DskipTests -U"))
     (message "Not inside a known project.")))
 
 ;;;###autoload
@@ -134,7 +134,7 @@ If WITH-METHOD is non-nil, include the method name."
   (if-let ((project (project-current)))
       (let ((default-directory (project-root project)))
         (compile
-         (format "mvn -Dmaven.surefire.debug=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=8000 -Dtest=%s test"
+         (format "./mvnw -Dmaven.surefire.debug=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=8000 -Dtest=%s test"
                  (eglot-helpers-java--get-fqnm-at-point t))))
     (message "Not inside a known project.")))
 
