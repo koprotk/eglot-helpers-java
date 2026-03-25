@@ -7,7 +7,7 @@
 ;; Maintainer: Daniel Muñoz <demunoz2@uc.cl>
 ;; URL: https://github.com/koprotk/eglot-java-helpers
 ;; Keywords: java, eglot, convenience, languages
-;; Package-Requires: ((emacs "29.1") (eglot "1.9"))
+;; Package-Requires: ((emacs "29.1") (eglot "1.9") (flymake "1.2"))
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -43,16 +43,20 @@
 ;; - `eglot-helpers-java-run-mvn-test-method' - Run test for the method at point
 ;; - `eglot-helpers-java-build-mvn-project-skiptests' - Build project without tests
 ;; - `eglot-helpers-java-debug-mvn-test-method' - Debug test method with JDB
+;; - `eglot-helpers-java-debug-mvn-test-method-now' - Launch JDB in listen mode, then run Maven test
 ;; - `eglot-helpers-java-launch-jdb' - Attach JDB on port 8000 in another window
 ;; - `eglot-helpers-java-gud-jdb-break' - Set JDB breakpoint at current line it's mimic the behaviour of the standard 'grud-break'
 ;; - `eglot-helpers-java-get-fqcn' - Get fully qualified class name
 ;; - `eglot-helpers-java-get-fqmn' - Get fully qualified method name
+;; - `eglot-helpers-java-flymake-branch-diagnostics' - Show Flymake diagnostics only for branch-changed files
+;; - `eglot-helpers-java--branch-changed-files' - Get files touched by branch-only commits
 
 ;;; Code:
 
 (require 'eglot)
 (require 'cl-lib)
 (require 'gud)
+(require 'flymake)
 
 (defgroup eglot-helpers-java nil
   "Helper functions for Java with Eglot."
@@ -128,6 +132,30 @@ If WITH-METHOD is non-nil, include the method name."
     (message "Not inside a known project.")))
 
 ;;;###autoload
+(defun eglot-helpers-java-debug-mvn-test-method-now ()
+  "Launch JDB in listen mode first, then run the Maven test connecting to it.
+JDB listens on port 8000; Maven starts with server=n so the JVM connects to JDB."
+  (interactive)
+  (if-let ((project (project-current)))
+      (let* ((project-dir (project-root project))
+             (default-directory project-dir)
+             (sourcepath (concat project-dir "src/main/java"
+                                 ":"
+                                 project-dir "src/test/java"))
+             (fqmn (eglot-helpers-java--get-fqnm-at-point t))
+             (orig-window (selected-window))
+             (orig-buffer (current-buffer)))
+        (jdb (format "jdb -listen 8000 -sourcepath%s" sourcepath))
+        (let ((jdb-buffer (current-buffer)))
+          (switch-to-buffer orig-buffer)
+          (select-window orig-window)
+          (display-buffer jdb-buffer '(display-buffer-use-some-window (inhibit-same-window . t)))
+          (compile
+           (format "./mvnw -Dmaven.surefire.debug=-agentlib:jdwp=transport=dt_socket,server=n,suspend=y,address=8000 -Dtest=%s test"
+                   fqmn))))
+    (message "Not inside a known project.")))
+
+;;;###autoload
 (defun eglot-helpers-java-debug-mvn-test-method ()
   "Run the test at point in debug mode."
   (interactive)
@@ -165,8 +193,97 @@ Use after starting a debug session with `eglot-helpers-java-debug-mvn-test-metho
       (gud-call (concat "stop at " class ":%l") 1)
     (message "Could not determine class name.")))
 
+(defcustom eglot-helpers-java-base-branch "develop"
+  "Base branch used to determine changed files for diagnostics filtering."
+  :type 'string
+  :group 'eglot-helpers-java)
+
+(defun eglot-helpers-java--branch-changed-files ()
+  "Return list of files touched by commits unique to this branch.
+Uses the merge-base with `eglot-helpers-java-base-branch' to find
+only commits that belong to the current branch, then collects all
+files modified by those commits."
+  (let* ((merge-base (string-trim
+                      (shell-command-to-string
+                       (format "git merge-base HEAD %s"
+                               eglot-helpers-java-base-branch))))
+         (files (split-string
+                 (shell-command-to-string
+                  (format "git log --name-only --pretty=format: %s..HEAD"
+                          merge-base))
+                 "\n" t)))
+    (delete-dups files)))
+
+;;;###autoload
+(defun eglot-helpers-java-flymake-branch-diagnostics ()
+  "Show Flymake project diagnostics filtered to files changed on this branch.
+Identifies changed files via commits unique to the current branch
+relative to `eglot-helpers-java-base-branch'.  Queries all Eglot
+managed buffers (including those JDTLS opened for workspace
+diagnostics) so files don't need to be visited manually."
+  (interactive)
+  (if-let ((server (eglot-current-server)))
+      (let* ((project (eglot--project server))
+             (root (project-root project))
+             (default-directory root)
+             (changed-files (eglot-helpers-java--branch-changed-files))
+             (basenames (mapcar #'file-name-nondirectory changed-files)))
+        (if (null changed-files)
+            (message "No files changed vs %s" eglot-helpers-java-base-branch)
+          (let ((diags '())
+                (managed (eglot--managed-buffers server)))
+            ;; Collect diagnostics from Eglot-managed buffers matching branch files
+            (dolist (buf managed)
+              (when (buffer-live-p buf)
+                (when-let* ((file (buffer-file-name buf))
+                            (name (file-name-nondirectory file))
+                            (_match (member name basenames)))
+                  (with-current-buffer buf
+                    (when (bound-and-true-p flymake-mode)
+                      (dolist (d (flymake-diagnostics))
+                        (push (list d (vector
+                                       (propertize name 'face 'font-lock-function-name-face)
+                                       (number-to-string (line-number-at-pos
+                                                          (flymake-diagnostic-beg d)))
+                                       (pcase (flymake-diagnostic-type d)
+                                         ('eglot-error (propertize "error" 'face 'error))
+                                         ('eglot-warning (propertize "warning" 'face 'warning))
+                                         ('eglot-note (propertize "note" 'face 'shadow))
+                                         (_ (format "%s" (flymake-diagnostic-type d))))
+                                       (flymake-diagnostic-text d)))
+                              diags)))))))
+            (if (null diags)
+                (message "No diagnostics found in %d branch file(s) (%d managed buffers)"
+                         (length changed-files) (length managed))
+              (let ((buf (get-buffer-create "*Branch Flymake diagnostics*")))
+                (with-current-buffer buf
+                  (let ((inhibit-read-only t))
+                    (erase-buffer)
+                    (tabulated-list-mode)
+                    (setq tabulated-list-format
+                          [("File" 30 t) ("Line" 6 t) ("Type" 10 t) ("Message" 0 t)])
+                    (setq tabulated-list-entries (reverse diags))
+                    (tabulated-list-init-header)
+                    (tabulated-list-print)
+                    (setq-local revert-buffer-function
+                                (lambda (_ignore-auto _noconfirm)
+                                  (eglot-helpers-java-flymake-branch-diagnostics)))))
+                (display-buffer buf)
+                (message "Showing %d diagnostics from %d branch file(s)"
+                         (length diags) (length changed-files)))))))
+    (message "No active Eglot server. Open a Java file first.")))
+
 
 ;; JDTLS customization for Eglot
+
+;; Prevent Eglot from honoring JDTLS's workspace/didChangeWatchedFiles
+;; registration, which creates thousands of file-notify watches and
+;; exhausts file descriptors on large projects.
+(with-eval-after-load 'eglot
+  (cl-defmethod eglot-register-capability
+    (_server (_method (eql workspace/didChangeWatchedFiles)) _id &key _watchers)
+    nil))
+
 (add-to-list 'eglot-server-programs
                `((java-mode java-ts-mode) .
                  ("jdtls"
@@ -191,14 +308,13 @@ Use after starting a debug session with `eglot-helpers-java-debug-mvn-test-metho
                    (:java
                     (:format
                      (:enabled t
-                      :settings (:url "https://raw.githubusercontent.com/google/styleguide/gh-pages/eclipse-java-google-style.xml")
-                      :profile "GoogleStyle"
                       :comments (:enabled t))
                      :insertSpaces t
-                     :tabSize 2)
+                     :tabSize 4)
                     :completion
                     (:enabled t
-                     :favoriteStaticMembers ["org.junit.Assert.*"
+                     :favoriteStaticMembers ["org.testng.Assert.*"
+                                             "org.junit.Assert.*"
                                              "org.junit.Assume.*"
                                              "org.junit.jupiter.api.Assertions.*"
                                              "org.junit.jupiter.api.Assumptions.*"
@@ -248,7 +364,7 @@ Use after starting a debug session with `eglot-helpers-java-debug-mvn-test-metho
                     :eclipse (:downloadSources t)
                     :configuration
                     (:updateBuildConfiguration "automatic"
-                     :runtimes []))))))
+                     :runtimes [(:name "JavaSE-21" :default t)]))))))
 
 (provide 'eglot-helpers-java)
 ;;; eglot-helpers-java.el ends here
