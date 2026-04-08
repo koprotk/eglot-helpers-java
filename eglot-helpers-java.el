@@ -7,7 +7,7 @@
 ;; Maintainer: Daniel Muñoz <demunoz2@uc.cl>
 ;; URL: https://github.com/koprotk/eglot-java-helpers
 ;; Keywords: java, eglot, convenience, languages
-;; Package-Requires: ((emacs "29.1") (eglot "1.9") (flymake "1.2"))
+;; Package-Requires: ((emacs "29.1") (eglot "1.9") (flymake "1.2") (gud "1.0"))
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -39,12 +39,10 @@
 ;; (require 'eglot-helpers-java)
 ;;
 ;; Key functions:
-;; - `eglot-helpers-java-run-mvn-test-class' - Run tests for the current class
-;; - `eglot-helpers-java-run-mvn-test-method' - Run test for the method at point
-;; - `eglot-helpers-java-build-mvn-project-skiptests' - Build project without tests
-;; - `eglot-helpers-java-debug-mvn-test-method' - Debug test method with JDB
-;; - `eglot-helpers-java-debug-mvn-test-method-now' - Launch JDB in listen mode, then run Maven test
-;; - `eglot-helpers-java-launch-jdb' - Attach JDB on port 8000 in another window
+;; - `eglot-helpers-java-mvn-run-test-class' - Run tests for the current class
+;; - `eglot-helpers-java-mvn-run-test-method' - Run test for the method at point
+;; - `eglot-helpers-java-mvn-build-project-skiptests' - Build project without tests
+;; - `eglot-helpers-java-mvn-debug-test-method' - Launch JDB in listen mode, then run Maven test
 ;; - `eglot-helpers-java-gud-jdb-break' - Set JDB breakpoint at current line it's mimic the behaviour of the standard 'grud-break'
 ;; - `eglot-helpers-java-get-fqcn' - Get fully qualified class name
 ;; - `eglot-helpers-java-get-fqmn' - Get fully qualified method name
@@ -105,7 +103,7 @@ If WITH-METHOD is non-nil, include the method name."
   (eglot-helpers-java--get-fqnm-at-point t))
 
 ;;;###autoload
-(defun eglot-helpers-java-run-mvn-test-class ()
+(defun eglot-helpers-java-mvn-run-test-class ()
   "Run the Maven test for the class at point."
   (interactive)
   (if-let ((project (project-current)))
@@ -114,7 +112,7 @@ If WITH-METHOD is non-nil, include the method name."
     (message "Not inside a known project.")))
 
 ;;;###autoload
-(defun eglot-helpers-java-run-mvn-test-method ()
+(defun eglot-helpers-java-mvn-run-test-method ()
   "Run the Maven test for the method at point."
   (interactive)
   (if-let ((project (project-current)))
@@ -123,7 +121,7 @@ If WITH-METHOD is non-nil, include the method name."
     (message "Not inside a known project.")))
 
 ;;;###autoload
-(defun eglot-helpers-java-build-mvn-project-skiptests ()
+(defun eglot-helpers-java-mvn-build-project-skiptests ()
   "Build the Maven project, skipping tests."
   (interactive)
   (if-let ((project (project-current)))
@@ -132,7 +130,7 @@ If WITH-METHOD is non-nil, include the method name."
     (message "Not inside a known project.")))
 
 ;;;###autoload
-(defun eglot-helpers-java-debug-mvn-test-method-now ()
+(defun eglot-helpers-java-mvn-debug-test-method ()
   "Launch JDB in listen mode first, then run the Maven test connecting to it.
 JDB listens on port 8000; Maven starts with server=n so the JVM connects to JDB."
   (interactive)
@@ -153,36 +151,6 @@ JDB listens on port 8000; Maven starts with server=n so the JVM connects to JDB.
           (compile
            (format "./mvnw -Dmaven.surefire.debug=-agentlib:jdwp=transport=dt_socket,server=n,suspend=y,address=8000 -Dtest=%s test"
                    fqmn))))
-    (message "Not inside a known project.")))
-
-;;;###autoload
-(defun eglot-helpers-java-debug-mvn-test-method ()
-  "Run the test at point in debug mode."
-  (interactive)
-  (if-let ((project (project-current)))
-      (let ((default-directory (project-root project)))
-        (compile
-         (format "./mvnw -Dmaven.surefire.debug=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=8000 -Dtest=%s test"
-                 (eglot-helpers-java--get-fqnm-at-point t))))
-    (message "Not inside a known project.")))
-
-;;;###autoload
-(defun eglot-helpers-java-launch-jdb ()
-  "Attach JDB to port 8000 with project source and class paths, opening in another window.
-Use after starting a debug session with `eglot-helpers-java-debug-mvn-test-method'."
-  (interactive)
-  (if-let ((project (project-current)))
-      (let* ((default-directory (project-root project))
-             (sourcepath (concat (project-root project) "src/main/java"
-                                 ":"
-                                 (project-root project) "src/test/java"))
-             (orig-window (selected-window))
-             (orig-buffer (current-buffer)))
-        (jdb (format "jdb -attach 8000 -sourcepath%s" sourcepath))
-        (let ((jdb-buffer (current-buffer)))
-          (switch-to-buffer orig-buffer)
-          (select-window orig-window)
-          (display-buffer jdb-buffer '(display-buffer-use-some-window (inhibit-same-window . t)))))
     (message "Not inside a known project.")))
 
 ;;;###autoload
