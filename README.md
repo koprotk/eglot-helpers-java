@@ -1,12 +1,123 @@
 # eglot-helpers-java
-My custom functions to work with eglot and java (not related to eglot-java.el project)
+
+LSP-driven Java helpers for Emacs, built on top of [Eglot](https://github.com/joaotavora/eglot) and [JDTLS](https://github.com/eclipse-jdtls/eclipse.jdt.ls).
+
+Replaces shell-based Maven test invocations with LSP commands, uses [dape](https://github.com/svaante/dape) (DAP protocol) for debugging instead of `gud`/`jdb`, and auto-manages the two JDTLS plugin JARs required for test running and debugging.
+
+## Features
+
+- **Auto-installs JDTLS plugins** — downloads `com.microsoft.java.debug.plugin` and `com.microsoft.java.test.plugin` on first use; upgrades on demand
+- **LSP-driven test running** — uses `vscode.java.test.junit.argument` to resolve classpath and launch args; falls back to `./mvnw -Dtest=...` transparently if the test plugin is not active
+- **DAP debugging via dape** — uses `vscode.java.startDebugSession` to get a DAP port, then attaches dape; falls back to Maven Surefire debug (`-Dmaven.surefire.debug`) with port-polling
+- **Auto-detects Lombok** — parses `pom.xml`, resolves the JAR from `~/.m2`, downloads from Maven Central if missing
+- **Branch-scoped diagnostics** — Flymake filter showing only errors in files changed relative to a base branch
+- **OSGi cache management** — `restart-server-clean` flag clears the JDTLS plugin cache to recover from bundle activation failures
 
 ## Requirements
-You need to have installed `jdtls` LSP server some package install it for you, not is this case. I preferd left the SO do that.
 
-## Setup
-If you work with `lombok` or an `-javaagent` url parameter you need to setup the url of the jar file, eg:
-`(setq eglot-helpers-java-lombok-jar-path "/Users/name/.m2/repository/org/projectlombok/lombok/1.18.36/lombok-1.18.36.jar")`
+- Emacs 29.1+
+- [Eglot](https://github.com/joaotavora/eglot) 1.9+
+- [dape](https://github.com/svaante/dape) 0.1+
+- [JDTLS](https://github.com/eclipse-jdtls/eclipse.jdt.ls) installed and on `$PATH` as `jdtls`
+- `unzip` available on `$PATH` (for extracting the test plugin from its `.vsix`)
+- `lsof` available on `$PATH` (for port detection during Maven debug fallback)
 
 ## Installation
-The same way as any package on emacs that is not MELPA/ELPA.
+
+### Manual
+
+Clone the repo and add it to your load path:
+
+```elisp
+(add-to-list 'load-path "/path/to/eglot-helpers-java")
+(require 'eglot-helpers-java)
+```
+
+### use-package
+
+```elisp
+(use-package eglot-helpers-java
+  :load-path "/path/to/eglot-helpers-java"
+  :after eglot
+  :demand t)
+```
+
+On first use, the package will automatically download the required JDTLS plugin JARs when Eglot starts on a Java file.
+
+## Configuration
+
+All settings are in the `eglot-helpers-java` customization group (`M-x customize-group RET eglot-helpers-java`).
+
+| Variable | Default | Description |
+|---|---|---|
+| `eglot-helpers-java-bundles-dir` | `~/.emacs.d/java-bundles/` | Where plugin JARs are stored |
+| `eglot-helpers-java-lombok-jar-path` | `nil` | Override Lombok JAR path (auto-detected from `pom.xml` when nil) |
+| `eglot-helpers-java-debug-port` | `5005` | JDWP port for Maven Surefire debug fallback |
+| `eglot-helpers-java-base-branch` | `"develop"` | Base branch for `flymake-branch-diagnostics` |
+
+## Commands
+
+### Bundle management
+
+| Command | Description |
+|---|---|
+| `eglot-helpers-java-ensure-bundles` | Download debug and test plugin JARs if missing |
+| `eglot-helpers-java-upgrade-bundles` | Upgrade JARs to latest versions |
+| `eglot-helpers-java-reload-bundles` | Hot-reload plugins into running JDTLS (no restart) |
+
+### Test running
+
+| Command | Description |
+|---|---|
+| `eglot-helpers-java-run-test-class` | Run all tests in the class at point |
+| `eglot-helpers-java-run-test-method` | Run the test method at point |
+
+Output appears in the `*compilation*` buffer.
+
+### Debugging
+
+| Command | Description |
+|---|---|
+| `eglot-helpers-java-debug-test-method` | Debug the test method at point via dape/DAP |
+
+Uses `vscode.java.startDebugSession` when available. If the test plugin is not loaded, falls back to Maven Surefire debug: Maven starts the JVM with JDWP listening on `eglot-helpers-java-debug-port`, then dape attaches once the port is ready.
+
+To set breakpoints, use dape's native `dape-breakpoint-toggle` (`C-x C-a C-b` by default).
+
+### Build
+
+| Command | Description |
+|---|---|
+| `eglot-helpers-java-mvn-build-project-skiptests` | `./mvnw clean package -DskipTests -U` |
+
+### Server management
+
+| Command | Description |
+|---|---|
+| `eglot-helpers-java-restart-server` | Restart JDTLS |
+| `eglot-helpers-java-restart-server-clean` | Restart JDTLS clearing the OSGi plugin cache |
+| `eglot-helpers-java-force-rebuild` | Force a full JDTLS workspace rebuild |
+| `eglot-helpers-java-list-java-commands` | List all `executeCommand` handlers registered with JDTLS |
+
+### Diagnostics
+
+| Command | Description |
+|---|---|
+| `eglot-helpers-java-flymake-branch-diagnostics` | Show Flymake errors only for files changed vs `eglot-helpers-java-base-branch` |
+
+## FQCN / FQMN resolution
+
+The package resolves the fully-qualified class name (FQCN) and method name (FQMN) at point by querying JDTLS via `textDocument/hover`, so test commands work without any manual configuration.
+
+## Test plugin activation
+
+If `vscode.java.test.junit.argument` reports "no delegateCommandHandler", try:
+
+1. `M-x eglot-helpers-java-reload-bundles` — hot-reload without restarting
+2. `M-x eglot-helpers-java-restart-server-clean` — clears the OSGi bundle cache and restarts
+
+If neither resolves it (usually a version mismatch between the test plugin JAR and the installed JDTLS), test running automatically falls back to `./mvnw -Dtest=FQCN test`. You'll see `vscode.java.test plugin not loaded — falling back to Maven...` in the echo area. This is normal and test output still appears in `*compilation*`.
+
+## License
+
+GPL-3.0-or-later. See the [GNU General Public License](https://www.gnu.org/licenses/gpl-3.0.html) for details.
