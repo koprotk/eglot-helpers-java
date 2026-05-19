@@ -10,6 +10,7 @@ Replaces shell-based Maven test invocations with LSP commands, uses [dape](https
 - **LSP-driven test running** — uses `vscode.java.test.junit.argument` to resolve classpath and launch args; falls back to `./mvnw -Dtest=...` transparently if the test plugin is not active
 - **DAP debugging via dape** — uses `vscode.java.startDebugSession` to get a DAP port, then attaches dape; falls back to Maven Surefire debug (`-Dmaven.surefire.debug`) with port-polling
 - **Auto-detects Lombok** — parses `pom.xml`, resolves the JAR from `~/.m2`, downloads from Maven Central if missing
+- **Curated JDTLS settings** — ships a settings plist (JavaSE-21 runtime, favorite static members, import order, parameter-name inlay hints, decompiled-source references, auto-build, Maven source download…) installed both via `initializationOptions.settings` at startup *and* via `eglot-workspace-configuration` so JDTLS honors it on every runtime `workspace/configuration` request
 - **Branch-scoped diagnostics** — Flymake filter showing only errors in files changed relative to a base branch
 - **OSGi cache management** — `restart-server-clean` flag clears the JDTLS plugin cache to recover from bundle activation failures
 
@@ -104,6 +105,17 @@ To set breakpoints, use dape's native `dape-breakpoint-toggle` (`C-x C-a C-b` by
 | Command | Description |
 |---|---|
 | `eglot-helpers-java-flymake-branch-diagnostics` | Show Flymake errors only for files changed vs `eglot-helpers-java-base-branch` |
+
+## JDTLS settings
+
+The package defines `eglot-helpers-java--jdtls-settings`, a plist of JDTLS configuration covering formatting, completion, code lenses, inlay hints, Maven/Gradle import, decompilation, code generation, and the Java runtime. Those settings are delivered to JDTLS in two ways:
+
+1. **At server startup** as `initializationOptions.settings` (read once when JDTLS launches).
+2. **At runtime** as `eglot-workspace-configuration` (Eglot answers JDTLS's `workspace/configuration` requests with the same plist).
+
+The second channel matters: JDTLS pulls many settings (`java.configuration.runtimes`, `java.inlayHints`, `java.completion.favoriteStaticMembers`, `java.format.*`, …) on demand after startup. Without it, those keys silently fall back to JDTLS defaults regardless of what `initializationOptions.settings` contained.
+
+To tweak the defaults, edit the `eglot-helpers-java--jdtls-settings` defconst and restart JDTLS (`M-x eglot-helpers-java-restart-server`).
 
 ## FQCN / FQMN resolution
 

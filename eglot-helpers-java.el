@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2025 Daniel Muñoz
 
-;; Version: 0.2
+;; Version: 0.3
 ;; Author: Daniel Muñoz <demunoz2@uc.cl>
 ;; Maintainer: Daniel Muñoz <demunoz2@uc.cl>
 ;; URL: https://github.com/koprotk/eglot-java-helpers
@@ -722,8 +722,6 @@ Run after branch switches, pulls, or when methods appear missing."
     (:format
      (:enabled t
       :comments (:enabled t))
-     :insertSpaces t
-     :tabSize 4
      :completion
      (:enabled t
       :favoriteStaticMembers ["org.testng.Assert.*"
@@ -779,6 +777,20 @@ Run after branch switches, pulls, or when methods appear missing."
      (:updateBuildConfiguration "automatic"
       :runtimes [(:name "JavaSE-21" :default t)])))
   "Static JDTLS :settings plist, mirroring the v1 configuration.")
+
+(defun eglot-helpers-java--apply-workspace-configuration ()
+  "Expose `eglot-helpers-java--jdtls-settings' to JDTLS via `workspace/configuration'.
+JDTLS pulls many settings (runtimes, inlay hints, format, completion,
+favouriteStaticMembers, importOrder…) at runtime via
+`workspace/configuration' requests, not only from
+`initializationOptions.settings' at startup.  Eglot answers those
+requests from `eglot-workspace-configuration', so we install the same
+plist buffer-locally in every Java buffer."
+  (setq-local eglot-workspace-configuration
+              eglot-helpers-java--jdtls-settings))
+
+(add-hook 'java-mode-hook    #'eglot-helpers-java--apply-workspace-configuration)
+(add-hook 'java-ts-mode-hook #'eglot-helpers-java--apply-workspace-configuration)
 
 (defun eglot-helpers-java--bundle-vector ()
   "Return a vector of installed JDTLS plugin JAR absolute paths."
