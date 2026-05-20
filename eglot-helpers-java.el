@@ -397,11 +397,13 @@ TEST-LEVEL: 3 = class, 4 = method."
                    (prog-args (string-join (append (plist-get args :programArguments) nil) " ")))
               (compile (string-trim
                         (format "java %s -cp %s %s %s"
-                                vm-args classpath main prog-args))))
+                                vm-args classpath main prog-args))
+                       t))
           ;; Test plugin not loaded — fall back to Maven (same format as v1).
           ;; FQCN/FQMN already uses the '#' separator that Maven -Dtest= expects.
           (error
-           (compile (format "%s -Dtest=%s test" (eglot-helpers-java--mvn-command) fqcn)))))
+           (compile (format "%s -Dtest=%s test" (eglot-helpers-java--mvn-command) fqcn)
+                    t))))
     (message "Not inside a known project.")))
 
 ;;;###autoload
@@ -438,7 +440,8 @@ the system `mvn'.  JDTLS has no LSP command equivalent to `mvn package'."
   (if-let ((project (project-current)))
       (let ((default-directory (project-root project)))
         (compile (format "%s clean package -DskipTests -U"
-                         (eglot-helpers-java--mvn-command))))
+                         (eglot-helpers-java--mvn-command))
+                 t))
     (message "Not inside a known project.")))
 
 
