@@ -41,6 +41,7 @@
 ;; - `eglot-helpers-java-reload-bundles'        Hot-reload plugins (no restart)
 ;; - `eglot-helpers-java-restart-server'        Restart JDTLS
 ;; - `eglot-helpers-java-restart-server-clean'  Restart clearing OSGi cache
+;; - `eglot-helpers-java-wipe-workspace'        Delete corrupted workspace cache
 ;; - `eglot-helpers-java-force-rebuild'         Force JDTLS workspace rebuild
 ;; - `eglot-helpers-java-flymake-branch-diagnostics' Branch-scoped diagnostics
 ;;
@@ -688,6 +689,48 @@ reinstall all bundles from scratch, at the cost of a slower startup."
   (message "eglot-helpers-java: next JDTLS start will use -clean (OSGi cache cleared).")
   (eglot-helpers-java-restart-server))
 
+(defun eglot-helpers-java--workspace-cache-dir ()
+  "Return JDTLS's workspace cache dir for the current project, or nil.
+Mirrors `jdtls.py': cachedir / (\"jdtls-\" + sha1(basename(cwd))), where
+cwd is the directory Eglot launches jdtls from — i.e., the project root."
+  (when-let* ((project (or (and (eglot-current-server)
+                                (eglot--project (eglot-current-server)))
+                           (project-current)))
+              (root    (project-root project))
+              (base    (file-name-nondirectory (directory-file-name root)))
+              (hash    (sha1 base))
+              (cache   (cond
+                        ((eq system-type 'darwin)
+                         (expand-file-name "Library/Caches/jdtls/" "~"))
+                        ((memq system-type '(gnu/linux berkeley-unix))
+                         (expand-file-name ".cache/jdtls/" "~"))
+                        ((eq system-type 'windows-nt)
+                         (expand-file-name "jdtls/" (getenv "APPDATA")))
+                        (t (expand-file-name "jdtls/" temporary-file-directory)))))
+    (expand-file-name (concat "jdtls-" hash) cache)))
+
+;;;###autoload
+(defun eglot-helpers-java-wipe-workspace ()
+  "Delete JDTLS's workspace cache for the current project and restart the server.
+Use this when JDTLS fails to start with a corrupted-workspace error such as
+`ObjectNotFoundException' in .metadata/.log.  The index rebuilds on next start
+(a few minutes on large projects)."
+  (interactive)
+  (let ((dir (eglot-helpers-java--workspace-cache-dir)))
+    (cond
+     ((null dir)
+      (user-error "Not inside a known project"))
+     ((not (file-directory-p dir))
+      (user-error "No JDTLS workspace cache at %s" dir))
+     ((not (yes-or-no-p (format "Delete JDTLS workspace cache %s? " dir)))
+      (message "Aborted."))
+     (t
+      (when (eglot-current-server)
+        (eglot-shutdown (eglot-current-server) t))
+      (delete-directory dir t)
+      (message "eglot-helpers-java: wiped %s. Restarting JDTLS..." dir)
+      (eglot-ensure)))))
+
 
 ;;;; ─── JDTLS workspace rebuild ───────────────────────────────────────────────
 
@@ -820,17 +863,14 @@ are downloaded before JDTLS launches so they can be loaded at startup."
              (length bundles)
              (if clean " [OSGi clean]" ""))
     `("jdtls"
-      "-Xms2G"
-      "-Xmx6G"
-      "-XX:+UseZGC"
-      "-XX:+ZGenerational"
-      "-XX:+AlwaysPreTouch"
-      "-XX:+UseStringDeduplication"
+      "--jvm-arg=-Xms2G"
+      "--jvm-arg=-Xmx6G"
+      "--jvm-arg=-XX:+UseZGC"
+      "--jvm-arg=-XX:+ZGenerational"
+      "--jvm-arg=-XX:+AlwaysPreTouch"
+      "--jvm-arg=-XX:+UseStringDeduplication"
       ,@(when lombok-arg (list lombok-arg))
       ,@(when clean (list "-clean"))
-      "--add-modules=ALL-SYSTEM"
-      "--add-opens" "java.base/java.util=ALL-UNNAMED"
-      "--add-opens" "java.base/java.lang=ALL-UNNAMED"
       :initializationOptions
       (:extendedClientCapabilities
        (:classFileContentsSupport        t
