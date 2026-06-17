@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2025 Daniel Muñoz
 
-;; Version: 0.3
+;; Version: 0.4
 ;; Author: Daniel Muñoz <demunoz2@uc.cl>
 ;; Maintainer: Daniel Muñoz <demunoz2@uc.cl>
 ;; URL: https://github.com/koprotk/eglot-java-helpers
@@ -91,6 +91,43 @@ The JVM listens on this port; dape attaches via JDTLS debug adapter."
 (defcustom eglot-helpers-java-base-branch "develop"
   "Base branch used to determine changed files for diagnostics filtering."
   :type 'string
+  :group 'eglot-helpers-java)
+
+(defcustom eglot-helpers-java-shutdown-timeout 20
+  "Seconds to wait for JDTLS to respond to LSP `shutdown' before force-killing.
+Eglot's default of 1.5s is not enough for JDTLS to flush its Eclipse
+workspace state on large projects, leaving `.metadata/' half-written.
+Used by `eglot-helpers-java--shutdown-all' on `kill-emacs-hook'."
+  :type 'integer
+  :group 'eglot-helpers-java)
+
+(defcustom eglot-helpers-java-connect-timeout 90
+  "Buffer-local value of `eglot-connect-timeout' for Java buffers.
+The 30s default is tight for large Maven projects whose first-time
+classpath resolution can take longer."
+  :type 'integer
+  :group 'eglot-helpers-java)
+
+(defcustom eglot-helpers-java-read-process-output-max (* 4 1024 1024)
+  "Buffer-local value of `read-process-output-max' for Java buffers.
+The Emacs default (~4KB on most builds) is far too small for LSP
+payloads; JDTLS readily emits multi-MB completion/hover responses."
+  :type 'integer
+  :group 'eglot-helpers-java)
+
+(defun eglot-helpers-java--default-heap-dump-dir ()
+  "Return a sensible default directory for JVM heap dumps."
+  (cond
+   ((eq system-type 'darwin)
+    (expand-file-name "Library/Logs/jdtls/" "~"))
+   ((memq system-type '(gnu/linux berkeley-unix))
+    (expand-file-name ".cache/jdtls/dumps/" "~"))
+   (t (expand-file-name "jdtls/" temporary-file-directory))))
+
+(defcustom eglot-helpers-java-heap-dump-dir (eglot-helpers-java--default-heap-dump-dir)
+  "Directory where JDTLS dumps its heap on OutOfMemoryError.
+Created lazily when JDTLS starts."
+  :type 'directory
   :group 'eglot-helpers-java)
 
 
@@ -616,6 +653,42 @@ Queries all Eglot-managed buffers so files don't need to be visited manually."
     (message "No active Eglot server. Open a Java file first.")))
 
 
+;;;; ─── Lifecycle ─────────────────────────────────────────────────────────────
+
+(defun eglot-helpers-java--shutdown-all ()
+  "Politely shut down every JDTLS server, waiting for workspace flush.
+Bound to `kill-emacs-hook' so workspaces are not corrupted on
+`save-buffers-kill-emacs'.  Stock `eglot-shutdown-all' passes nil for
+TIMEOUT (falls back to 1.5s) which is too short for JDTLS to flush its
+Eclipse `.metadata/' state on large projects."
+  (when (boundp 'eglot--servers-by-project)
+    (maphash
+     (lambda (_proj servers)
+       (dolist (s servers)
+         (when (and (jsonrpc-running-p s)
+                    (let ((prog (car-safe (process-command
+                                           (jsonrpc--process s)))))
+                      (and prog (string-match-p "jdtls" prog))))
+           (ignore-errors
+             (eglot-shutdown s nil
+                             eglot-helpers-java-shutdown-timeout
+                             nil)))))
+     eglot--servers-by-project)))
+
+(add-hook 'kill-emacs-hook #'eglot-helpers-java--shutdown-all)
+
+(defun eglot-helpers-java--tune-io ()
+  "Tune jsonrpc/process knobs in Java buffers before Eglot connects."
+  (setq-local read-process-output-max
+              eglot-helpers-java-read-process-output-max
+              process-adaptive-read-buffering nil
+              eglot-connect-timeout
+              eglot-helpers-java-connect-timeout))
+
+(add-hook 'java-mode-hook    #'eglot-helpers-java--tune-io)
+(add-hook 'java-ts-mode-hook #'eglot-helpers-java--tune-io)
+
+
 ;;;; ─── Server restart ────────────────────────────────────────────────────────
 
 ;;;###autoload
@@ -790,6 +863,7 @@ Run after branch switches, pulls, or when methods appear missing."
      :signatureHelp (:enabled t :description (:enabled t))
      :contentProvider (:preferred "fernflower")
      :autobuild (:enabled t)
+     :maxConcurrentBuilds 1
      :maven (:downloadSources t :updateSnapshots t)
      :implementationsCodeLens (:enabled t)
      :referencesCodeLens (:enabled t)
@@ -858,7 +932,9 @@ are downloaded before JDTLS launches so they can be loaded at startup."
          (lombok  (and root (eglot-helpers-java--ensure-lombok-jar root)))
          (lombok-arg (and lombok
                           (concat "--jvm-arg=-javaagent:"
-                                  (expand-file-name lombok)))))
+                                  (expand-file-name lombok))))
+         (dump-dir (expand-file-name eglot-helpers-java-heap-dump-dir)))
+    (make-directory dump-dir t)
     (message "eglot-helpers-java: starting JDTLS with %d bundle(s)%s"
              (length bundles)
              (if clean " [OSGi clean]" ""))
@@ -869,6 +945,11 @@ are downloaded before JDTLS launches so they can be loaded at startup."
       "--jvm-arg=-XX:+ZGenerational"
       "--jvm-arg=-XX:+AlwaysPreTouch"
       "--jvm-arg=-XX:+UseStringDeduplication"
+      ;; Exit immediately on OOM rather than thrashing — GC death-spirals
+      ;; overlap in-flight workspace writes and corrupt .metadata/.
+      "--jvm-arg=-XX:+ExitOnOutOfMemoryError"
+      "--jvm-arg=-XX:+HeapDumpOnOutOfMemoryError"
+      ,(format "--jvm-arg=-XX:HeapDumpPath=%s" dump-dir)
       ,@(when lombok-arg (list lombok-arg))
       ,@(when clean (list "-clean"))
       :initializationOptions
