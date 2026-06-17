@@ -688,6 +688,24 @@ Eclipse `.metadata/' state on large projects."
 (add-hook 'java-mode-hook    #'eglot-helpers-java--tune-io)
 (add-hook 'java-ts-mode-hook #'eglot-helpers-java--tune-io)
 
+(defun eglot-helpers-java--enable-prompt-revert ()
+  "Use file-notify-based auto-revert in Java buffers.
+Doom disables `auto-revert-use-notify' globally and falls back to a
+lazy revert that only fires on buffer/window/frame switches and saves.
+External edits (Claude in a terminal, formatters, branch switches)
+therefore land on disk while the Emacs buffer stays stale, and Eglot
+never sends `didChange' to JDTLS — JDTLS's in-memory model drifts from
+disk and corrupts `.metadata/' on the next build.
+
+Enabling `auto-revert-mode' buffer-locally opts Java buffers out of
+Doom's lazy path (see `doom-auto-revert-buffer-h') and uses real
+file-notify, so external edits reach Eglot immediately."
+  (setq-local auto-revert-use-notify t)
+  (auto-revert-mode 1))
+
+(add-hook 'java-mode-hook    #'eglot-helpers-java--enable-prompt-revert)
+(add-hook 'java-ts-mode-hook #'eglot-helpers-java--enable-prompt-revert)
+
 
 ;;;; ─── Server restart ────────────────────────────────────────────────────────
 
