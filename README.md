@@ -59,6 +59,7 @@ All settings are in the `eglot-helpers-java` customization group (`M-x customize
 | `eglot-helpers-java-connect-timeout` | `90` | Buffer-local override of `eglot-connect-timeout` for Java buffers |
 | `eglot-helpers-java-read-process-output-max` | `4 MiB` | Buffer-local override of `read-process-output-max` for Java buffers |
 | `eglot-helpers-java-heap-dump-dir` | `~/Library/Logs/jdtls/` (macOS) | Where the JVM writes a heap dump on OOM |
+| `eglot-helpers-java-watch-exclusions` | `target build out node_modules .git ...` | Path segments excluded from `eglot--watch-globs` expansion |
 
 ## Commands
 
@@ -101,7 +102,6 @@ To set breakpoints, use dape's native `dape-breakpoint-toggle` (`C-x C-a C-b` by
 |---|---|
 | `eglot-helpers-java-restart-server` | Restart JDTLS |
 | `eglot-helpers-java-restart-server-clean` | Restart JDTLS clearing the OSGi plugin cache |
-| `eglot-helpers-java-force-rebuild` | Force a full JDTLS workspace rebuild |
 | `eglot-helpers-java-wipe-workspace` | Delete the JDTLS workspace cache for the current project and restart (recovery for `ObjectNotFoundException` and friends) |
 | `eglot-helpers-java-list-java-commands` | List all `executeCommand` handlers registered with JDTLS |
 
@@ -139,12 +139,10 @@ If neither resolves it (usually a version mismatch between the test plugin JAR a
 
 Several knobs are tuned to prevent JDTLS workspace corruption (the kind that surfaces as `ObjectNotFoundException` in `.metadata/.log` and is otherwise only recoverable with `eglot-helpers-java-wipe-workspace`):
 
-- **File-notify auto-revert in Java buffers.** Doom disables `auto-revert-use-notify` globally and falls back to a lazy revert that only fires on buffer/window/frame switches and saves. External edits (Claude running in a terminal, formatters, branch switches) therefore stay stale in the Emacs buffer, Eglot never sends `didChange`, and JDTLS's in-memory model drifts from disk until the next build corrupts `.metadata/`. The package re-enables `auto-revert-mode` with file-notify buffer-locally in Java buffers so external edits propagate to JDTLS immediately. (Only covers files you have open in a buffer — for batches of edits to unvisited files, follow up with `M-x eglot-helpers-java-force-rebuild`.)
 - **Graceful shutdown on Emacs quit.** A `kill-emacs-hook` calls `eglot-shutdown` on every JDTLS server with `eglot-helpers-java-shutdown-timeout` seconds to flush state. Eglot's stock 1.5s default is not enough on large projects — JDTLS gets force-killed mid-write, leaving `.metadata/` half-flushed.
 - **Exit-on-OOM JVM flags.** `-XX:+ExitOnOutOfMemoryError` makes the JVM exit immediately on OOM rather than thrashing while workspace writes are in flight. `-XX:+HeapDumpOnOutOfMemoryError` and `-XX:HeapDumpPath=eglot-helpers-java-heap-dump-dir` capture a dump for diagnosis.
 - **Larger JSON-RPC read buffer.** `read-process-output-max` is bumped to 4 MiB in Java buffers (Emacs default ~4 KiB is far too small for LSP payloads), and `process-adaptive-read-buffering` is disabled.
-- **Serialized incremental builds.** `:maxConcurrentBuilds 1` in the JDTLS settings reduces concurrent `.metadata/` writers.
-- **No file watcher registration.** `workspace/didChangeWatchedFiles` is suppressed because on large projects JDTLS tries to watch thousands of files and exhausts file descriptors.
+- **JDTLS file watchers honored, with exclusions.** `workspace/didChangeWatchedFiles` registration is allowed so JDTLS learns about external edits to files not open in any buffer. The package advises `eglot--watch-globs` to filter `project-files` through `eglot-helpers-java-watch-exclusions` (defaults: `target`, `build`, `out`, `node_modules`, `.git`, `.metadata`, `.idea`, `.vscode`, `.gradle`, `.mvn`, `bin`, `dist`) so the watcher expansion skips noise dirs that would otherwise exhaust FDs.
 
 If a workspace still ends up corrupted, `eglot-helpers-java-wipe-workspace` clears the cache and rebuilds. Check `eglot-helpers-java-heap-dump-dir` for a heap dump — its presence confirms OOM was the trigger, and bumping `-Xmx` in `eglot-helpers-java--server-contact` is the next step.
 

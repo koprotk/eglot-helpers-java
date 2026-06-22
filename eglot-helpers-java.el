@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2025 Daniel Muñoz
 
-;; Version: 0.4
+;; Version: 0.5
 ;; Author: Daniel Muñoz <demunoz2@uc.cl>
 ;; Maintainer: Daniel Muñoz <demunoz2@uc.cl>
 ;; URL: https://github.com/koprotk/eglot-java-helpers
@@ -42,7 +42,6 @@
 ;; - `eglot-helpers-java-restart-server'        Restart JDTLS
 ;; - `eglot-helpers-java-restart-server-clean'  Restart clearing OSGi cache
 ;; - `eglot-helpers-java-wipe-workspace'        Delete corrupted workspace cache
-;; - `eglot-helpers-java-force-rebuild'         Force JDTLS workspace rebuild
 ;; - `eglot-helpers-java-flymake-branch-diagnostics' Branch-scoped diagnostics
 ;;
 ;; If `vscode.java.test.junit.argument' reports no delegate handler:
@@ -128,6 +127,21 @@ payloads; JDTLS readily emits multi-MB completion/hover responses."
   "Directory where JDTLS dumps its heap on OutOfMemoryError.
 Created lazily when JDTLS starts."
   :type 'directory
+  :group 'eglot-helpers-java)
+
+(defcustom eglot-helpers-java-watch-exclusions
+  '("target" "build" "out" "node_modules" ".git" ".metadata"
+    ".idea" ".vscode" ".gradle" ".mvn" "bin" "dist")
+  "Directory names excluded from Eglot file-notify watcher expansion.
+JDTLS asks Eglot to watch the project recursively; Eglot then calls
+`project-files' and adds one FD per subdir.  On large Maven projects
+that walks into `target/', `build/', etc. and exhausts FDs.
+
+Each entry matches a path segment.  A dir is excluded if any segment
+of its absolute path equals an entry verbatim (case-sensitive).  This
+keeps JDTLS's logical watcher registration intact but skips registering
+FDs for noise dirs that mirror VSCode's `files.watcherExclude' defaults."
+  :type '(repeat string)
   :group 'eglot-helpers-java)
 
 
@@ -385,16 +399,6 @@ When WITH-METHOD is non-nil, include the method name (format: pkg.Class#method).
      ((and with-method method-found) (concat package "." class "#" method-found))
      ((and package class)            (concat package "." class))
      (t nil))))
-
-;;;###autoload
-(defun eglot-helpers-java-get-fqcn ()
-  "Return the fully qualified class name at point."
-  (eglot-helpers-java--get-fqnm-at-point nil))
-
-;;;###autoload
-(defun eglot-helpers-java-get-fqmn ()
-  "Return the fully qualified method name at point."
-  (eglot-helpers-java--get-fqnm-at-point t))
 
 
 ;;;; ─── Test running via LSP ──────────────────────────────────────────────────
@@ -685,26 +689,15 @@ Eclipse `.metadata/' state on large projects."
               eglot-connect-timeout
               eglot-helpers-java-connect-timeout))
 
+;; JDTLS asks Eglot to watch ~/.m2/repository and JDK home — each is
+;; tens of thousands of dirs and blows past `eglot-max-file-watches'.
+;; Restrict watchers to project root only.  Set globally because Eglot
+;; reads the var in its server buffer, not the Java buffer.
+(with-eval-after-load 'eglot
+  (setq eglot-watch-files-outside-project-root nil))
+
 (add-hook 'java-mode-hook    #'eglot-helpers-java--tune-io)
 (add-hook 'java-ts-mode-hook #'eglot-helpers-java--tune-io)
-
-(defun eglot-helpers-java--enable-prompt-revert ()
-  "Use file-notify-based auto-revert in Java buffers.
-Doom disables `auto-revert-use-notify' globally and falls back to a
-lazy revert that only fires on buffer/window/frame switches and saves.
-External edits (Claude in a terminal, formatters, branch switches)
-therefore land on disk while the Emacs buffer stays stale, and Eglot
-never sends `didChange' to JDTLS — JDTLS's in-memory model drifts from
-disk and corrupts `.metadata/' on the next build.
-
-Enabling `auto-revert-mode' buffer-locally opts Java buffers out of
-Doom's lazy path (see `doom-auto-revert-buffer-h') and uses real
-file-notify, so external edits reach Eglot immediately."
-  (setq-local auto-revert-use-notify t)
-  (auto-revert-mode 1))
-
-(add-hook 'java-mode-hook    #'eglot-helpers-java--enable-prompt-revert)
-(add-hook 'java-ts-mode-hook #'eglot-helpers-java--enable-prompt-revert)
 
 
 ;;;; ─── Server restart ────────────────────────────────────────────────────────
@@ -823,45 +816,35 @@ Use this when JDTLS fails to start with a corrupted-workspace error such as
       (eglot-ensure)))))
 
 
-;;;; ─── JDTLS workspace rebuild ───────────────────────────────────────────────
-
-;;;###autoload
-(defun eglot-helpers-java-force-rebuild ()
-  "Force JDTLS to rebuild the workspace index.
-Run after branch switches, pulls, or when methods appear missing."
-  (interactive)
-  (if-let ((server (eglot-current-server)))
-      (progn
-        (jsonrpc-request server :java/buildWorkspace :json-false)
-        (message "JDTLS workspace rebuild requested."))
-    (message "No active Eglot server.")))
-
-(defun eglot-helpers-java--rebuild-after-magit ()
-  "Trigger a JDTLS workspace rebuild after Magit refreshes."
-  (when (eglot-current-server)
-    (eglot-helpers-java-force-rebuild)))
-
-(with-eval-after-load 'magit
-  (add-hook 'magit-post-refresh-hook #'eglot-helpers-java--rebuild-after-magit))
-
-
 ;;;; ─── JDTLS server configuration ────────────────────────────────────────────
 
-;; Suppress workspace/didChangeWatchedFiles registration: on large projects
-;; JDTLS tries to watch thousands of files which exhausts file descriptors.
+(defun eglot-helpers-java--path-excluded-p (path)
+  "Return non-nil if PATH has a segment in `eglot-helpers-java-watch-exclusions'."
+  (let ((segs (split-string (directory-file-name path) "/" t)))
+    (cl-some (lambda (s) (member s eglot-helpers-java-watch-exclusions)) segs)))
+
+(defun eglot-helpers-java--watch-globs-filter (orig &rest args)
+  "Skip excluded dirs during ORIG's watcher expansion.
+Shadows `file-readable-p' to return nil for paths whose segments
+match `eglot-helpers-java-watch-exclusions'.  Eglot's `add-watch'
+short-circuits on the `file-readable-p' guard BEFORE incrementing
+`watch-count', so excluded paths cost nothing.  Covers both the
+`subdirs-using-project' and `subdirs-using-find' code paths."
+  (cl-letf* ((orig-fr (symbol-function 'file-readable-p))
+             ((symbol-function 'file-readable-p)
+              (lambda (path)
+                (and (not (eglot-helpers-java--path-excluded-p path))
+                     (funcall orig-fr path)))))
+    (apply orig args)))
+
 (with-eval-after-load 'eglot
-  (cl-defmethod eglot-register-capability
-    (_server (_method (eql workspace/didChangeWatchedFiles)) _id &key _watchers)
-    nil))
+  (advice-add 'eglot--watch-globs :around
+              #'eglot-helpers-java--watch-globs-filter))
 
 (defconst eglot-helpers-java--jdtls-settings
   '(:java
-    (:format
-     (:enabled t
-      :comments (:enabled t))
-     :completion
-     (:enabled t
-      :favoriteStaticMembers ["org.testng.Assert.*"
+    (:completion
+     (:favoriteStaticMembers ["org.testng.Assert.*"
                               "org.junit.Assert.*"
                               "org.junit.Assume.*"
                               "org.junit.jupiter.api.Assertions.*"
@@ -876,16 +859,11 @@ Run after branch switches, pulls, or when methods appear missing."
                       "org.graalvm.*"]
       :importOrder ["java" "javax" "org" "com"]
       :guessMethodArguments t
-      :maxResults 0
-      :postfix (:enabled t))
+      :maxResults 0)
      :signatureHelp (:enabled t :description (:enabled t))
      :contentProvider (:preferred "fernflower")
-     :autobuild (:enabled t)
-     :maxConcurrentBuilds 1
      :maven (:downloadSources t :updateSnapshots t)
      :implementationsCodeLens (:enabled t)
-     :referencesCodeLens (:enabled t)
-     :references (:includeDecompiledSources t)
      :inlayHints
      (:parameterNames (:enabled "all"))
      :codeGeneration
@@ -900,13 +878,7 @@ Run after branch switches, pulls, or when methods appear missing."
        :limitElements 0))
      :saveActions
      (:organizeImports t)
-     :sources
-     (:organizeImports
-      (:starThreshold 99
-       :staticStarThreshold 99))
-     :import (:gradle (:wrapper (:enabled t))
-              :maven (:enabled t)
-              :exclusions ["**/node_modules/**"
+     :import (:exclusions ["**/node_modules/**"
                            "**/.metadata/**"
                            "**/archetype-resources/**"
                            "**/META-INF/maven/**"])
@@ -961,8 +933,6 @@ are downloaded before JDTLS launches so they can be loaded at startup."
       "--jvm-arg=-Xmx6G"
       "--jvm-arg=-XX:+UseZGC"
       "--jvm-arg=-XX:+ZGenerational"
-      "--jvm-arg=-XX:+AlwaysPreTouch"
-      "--jvm-arg=-XX:+UseStringDeduplication"
       ;; Exit immediately on OOM rather than thrashing — GC death-spirals
       ;; overlap in-flight workspace writes and corrupt .metadata/.
       "--jvm-arg=-XX:+ExitOnOutOfMemoryError"
