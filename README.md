@@ -21,7 +21,6 @@ Replaces shell-based Maven test invocations with LSP commands, uses [dape](https
 - [dape](https://github.com/svaante/dape) 0.1+
 - [JDTLS](https://github.com/eclipse-jdtls/eclipse.jdt.ls) installed and on `$PATH` as `jdtls`
 - `unzip` available on `$PATH` (for extracting the test plugin from its `.vsix`)
-- `lsof` available on `$PATH` (for port detection during Maven debug fallback)
 
 ## Installation
 
@@ -94,7 +93,8 @@ To set breakpoints, use dape's native `dape-breakpoint-toggle` (`C-x C-a C-b` by
 
 | Command | Description |
 |---|---|
-| `eglot-helpers-java-mvn-build-project-skiptests` | `./mvnw clean package -DskipTests -U` |
+| `eglot-helpers-java-build-workspace` | Rebuild via JDTLS's `java/buildWorkspace` LSP request (incremental; `C-u` for full). Recompiles through Eclipse's own resource API — safe to run often, won't corrupt the workspace cache. **Prefer this for routine rebuilds.** |
+| `eglot-helpers-java-mvn-build-project-skiptests` | `./mvnw clean package -DskipTests -U`. Use only when you need a real Maven package (e.g. a jar). The `clean` step deletes `target/classes` outside Eclipse's resource API — see Stability section. |
 
 ### Server management
 
@@ -145,6 +145,18 @@ Several knobs are tuned to prevent JDTLS workspace corruption (the kind that sur
 - **JDTLS file watchers honored, with exclusions.** `workspace/didChangeWatchedFiles` registration is allowed so JDTLS learns about external edits to files not open in any buffer. The package advises `eglot--watch-globs` to filter `project-files` through `eglot-helpers-java-watch-exclusions` (defaults: `target`, `build`, `out`, `node_modules`, `.git`, `.metadata`, `.idea`, `.vscode`, `.gradle`, `.mvn`, `bin`, `dist`) so the watcher expansion skips noise dirs that would otherwise exhaust FDs.
 
 If a workspace still ends up corrupted, `eglot-helpers-java-wipe-workspace` clears the cache and rebuilds. Check `eglot-helpers-java-heap-dump-dir` for a heap dump — its presence confirms OOM was the trigger, and bumping `-Xmx` in `eglot-helpers-java--server-contact` is the next step.
+
+**`mvnw clean` is another corruption trigger.** Eclipse's resource-tree save/restore mechanism keeps delta history referencing files under `target/classes/`. Deleting those files outside Eclipse's resource API — which is exactly what `mvn clean` does — leaves the tree referencing files that no longer exist; the next JDTLS startup reconstructs a backward delta, hits the missing entry, and throws `ObjectNotFoundException` in `.metadata/.log`, corrupting the workspace again. This is made worse because `target` is (deliberately) in `eglot-helpers-java-watch-exclusions`, so JDTLS never learns about the deletion in real time — it only discovers the mismatch cold, at next restart. Use `eglot-helpers-java-build-workspace` for routine rebuilds instead: it recompiles through JDTLS's own `java/buildWorkspace` request, so `target/classes` stays consistent with the resource tree. Reserve `eglot-helpers-java-mvn-build-project-skiptests` for when you actually need Maven to produce a package.
+
+## Claude Code integration
+
+[`eglot-helpers-java-skill`](https://github.com/koprotk/eglot-helpers-java-skill)
+is a companion Claude Code skill (separate repo) that drives this package
+via `emacsclient` — an agent can check that a file compiles or run a test
+class/method against your already-running Emacs/JDTLS and read the result
+back, without cold-starting Maven from the shell. Install it personally at
+`~/.claude/skills/eglot-java-test/` or per-project at
+`.claude/skills/eglot-java-test/`.
 
 ## License
 

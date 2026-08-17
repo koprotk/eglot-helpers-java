@@ -35,7 +35,8 @@
 ;; - `eglot-helpers-java-upgrade-bundles'      Upgrade plugins to latest
 ;; - `eglot-helpers-java-run-test-class'       Run tests for class at point
 ;; - `eglot-helpers-java-run-test-method'      Run test method at point
-;; - `eglot-helpers-java-mvn-build-project-skiptests' Build without tests
+;; - `eglot-helpers-java-build-workspace'      Rebuild via JDTLS (java/buildWorkspace)
+;; - `eglot-helpers-java-mvn-build-project-skiptests' Build without tests (mvnw clean)
 ;; - `eglot-helpers-java-debug-test-method'    Debug test method via dape
 ;; - `eglot-helpers-java-list-java-commands'     List JDTLS executeCommand handlers
 ;; - `eglot-helpers-java-reload-bundles'        Hot-reload plugins (no restart)
@@ -415,12 +416,12 @@ Returns a plist with :classpath, :mainClass, :vmArguments, :programArguments."
     (unless server
       (user-error "No active Eglot server — open a Java file first"))
     (condition-case err
-        (eglot-execute-command
+        (eglot-execute
          server
-         "vscode.java.test.junit.argument"
-         (vector (list :testLevel  test-level
-                       :testNames  (vector fqcn)
-                       :testKind   0)))
+         (list :command   "vscode.java.test.junit.argument"
+               :arguments (vector (list :testLevel  test-level
+                                        :testNames  (vector fqcn)
+                                        :testKind   0))))
       (error
        (error "JDTLS test plugin unavailable: %s" (error-message-string err))))))
 
@@ -463,7 +464,51 @@ TEST-LEVEL: 3 = class, 4 = method."
    (eglot-helpers-java--get-fqnm-at-point t) 4))
 
 
-;;;; ─── Maven helpers (no LSP alternative for build/test invocation) ─────────
+;;;; ─── Build via LSP ──────────────────────────────────────────────────────────
+
+;; `java/buildWorkspace' is JDTLS's own request (not a workspace/executeCommand)
+;; for recompiling through Eclipse's resource API.  BuildWorkspaceStatus values
+;; per org.eclipse.jdt.ls.core.internal.handlers.BuildWorkspaceStatus:
+;;   FAILED=0  SUCCEED=1  WITHDRAWN=2  CANCELLED=3
+(defun eglot-helpers-java--build-workspace-status-name (code)
+  "Return a human string for a `java/buildWorkspace' response CODE."
+  (pcase code
+    (0 "FAILED")
+    (1 "SUCCEEDED")
+    (2 "WITHDRAWN (superseded by another build)")
+    (3 "CANCELLED")
+    (_ (format "unknown status %S" code))))
+
+;;;###autoload
+(defun eglot-helpers-java-build-workspace (&optional full)
+  "Rebuild the current project via JDTLS's `java/buildWorkspace' LSP request.
+Recompiles through Eclipse's own resource API, so `target/classes' is
+kept in sync with JDTLS's internal delta tree.  Prefer this for routine
+rebuilds over `eglot-helpers-java-mvn-build-project-skiptests': that
+command runs `mvnw clean', which deletes class files outside Eclipse's
+resource API and corrupts the JDTLS workspace cache (`ObjectNotFoundException'
+at next startup, recoverable only via `eglot-helpers-java-wipe-workspace').
+
+With a prefix arg, FULL forces a full rebuild instead of incremental."
+  (interactive "P")
+  (if-let ((server (eglot-current-server)))
+      (progn
+        (message "eglot-helpers-java: %s build requested..."
+                 (if full "full" "incremental"))
+        (jsonrpc-async-request
+         server :java/buildWorkspace (if full t :json-false)
+         :success-fn
+         (lambda (result)
+           (message "eglot-helpers-java: build %s"
+                    (eglot-helpers-java--build-workspace-status-name result)))
+         :error-fn
+         (lambda (err)
+           (message "eglot-helpers-java: build request failed: %s"
+                    (plist-get err :message)))))
+    (message "No active Eglot server. Open a Java file first.")))
+
+
+;;;; ─── Maven helpers (no LSP alternative for packaging/tests) ────────────────
 
 (defun eglot-helpers-java--mvn-command ()
   "Return the Maven executable for the current project.
@@ -477,7 +522,11 @@ Prefers ./mvnw (project wrapper) over the system mvn."
 (defun eglot-helpers-java-mvn-build-project-skiptests ()
   "Build the Maven project, skipping tests.
 Uses the project's ./mvnw wrapper when present, otherwise falls back to
-the system `mvn'.  JDTLS has no LSP command equivalent to `mvn package'."
+the system `mvn'.  For routine rebuilds while JDTLS is running, prefer
+`eglot-helpers-java-build-workspace' instead: this command runs `mvnw
+clean', which deletes `target/classes' outside Eclipse's resource API
+and can corrupt the JDTLS workspace cache.  Use this one when you
+specifically need a real Maven package (e.g. producing a jar)."
   (interactive)
   (if-let ((project (project-current)))
       (let ((default-directory (project-root project)))
@@ -498,8 +547,9 @@ attach/launch request body — preserving the JDWP port for attach mode."
   (let* ((server (or (eglot-current-server) (user-error "No active Eglot server")))
          (debug-session
           (condition-case err
-              (eglot-execute-command server "vscode.java.startDebugSession"
-                                     (vector launch-config))
+              (eglot-execute server
+                             (list :command   "vscode.java.startDebugSession"
+                                   :arguments (vector launch-config)))
             (error
              (user-error "vscode.java.startDebugSession failed: %s"
                          (error-message-string err)))))
@@ -529,11 +579,17 @@ Uses `vscode.java.test.junit.argument' to resolve JVM launch args, then
     (eglot-helpers-java--dape-via-start-debug-session dap-launch)))
 
 (defun eglot-helpers-java--port-listening-p (port)
-  "Return t if PORT has a LISTEN socket on localhost.
-Uses `lsof' to inspect the kernel socket table — no TCP connection is made,
-so the JDWP handshake is not disturbed."
-  (= 0 (call-process "lsof" nil nil nil
-                      "-nP" (format "-iTCP:%d" port) "-sTCP:LISTEN")))
+  "Return t if PORT accepts TCP connections on localhost.
+Opens then immediately closes the socket without sending or reading any
+bytes, so the JDWP wire handshake itself is never attempted — dt_socket
+treats an early disconnect as a dropped connection attempt and returns
+to listening for the real one, so this probe does not disturb it."
+  (condition-case nil
+      (let ((proc (open-network-stream
+                   "eglot-helpers-java-port-probe" nil "127.0.0.1" port)))
+        (delete-process proc)
+        t)
+    (file-error nil)))
 
 (defun eglot-helpers-java--wait-for-jvm-listen (port &optional attempt)
   "Poll every second until PORT is in LISTEN state, then attach dape.
@@ -751,7 +807,9 @@ If it still fails, use `eglot-helpers-java-restart-server-clean'."
               (progn
                 ;; java.reloadBundles is a workspace/executeCommand whose first
                 ;; argument is the array of bundle paths (arguments[0]).
-                (eglot-execute-command server "java.reloadBundles" (vector bundles))
+                (eglot-execute server
+                               (list :command   "java.reloadBundles"
+                                     :arguments (vector bundles)))
                 (message "eglot-helpers-java: reload requested for %d bundle(s). Run `eglot-helpers-java-list-java-commands' to confirm, then retry."
                          (length bundles)))
             (error
@@ -775,8 +833,10 @@ reinstall all bundles from scratch, at the cost of a slower startup."
 
 (defun eglot-helpers-java--workspace-cache-dir ()
   "Return JDTLS's workspace cache dir for the current project, or nil.
-Mirrors `jdtls.py': cachedir / (\"jdtls-\" + sha1(basename(cwd))), where
-cwd is the directory Eglot launches jdtls from — i.e., the project root."
+This is the authoritative path: `eglot-helpers-java--server-contact'
+passes it to jdtls explicitly via `-data', so this function's result is
+guaranteed to match rather than guessing jdtls's undocumented internal
+default (cachedir / (\"jdtls-\" + sha1(basename(project-root))))."
   (when-let* ((project (or (and (eglot-current-server)
                                 (eglot--project (eglot-current-server)))
                            (project-current)))
@@ -909,6 +969,19 @@ plist buffer-locally in every Java buffer."
          (list (eglot-helpers-java--installed-jar "com.microsoft.java.debug.plugin")
                (eglot-helpers-java--installed-jar "com.microsoft.java.test.plugin")))))
 
+(defun eglot-helpers-java--java-major-version ()
+  "Return the major version of the `java' executable JDTLS will launch with, or nil.
+Respects `JAVA_HOME' (jdtls's own launcher script honors it the same way)
+before falling back to `java' on `exec-path'."
+  (let* ((java-bin (if-let ((home (getenv "JAVA_HOME")))
+                        (expand-file-name "bin/java" home)
+                      (executable-find "java"))))
+    (when (and java-bin (file-executable-p java-bin))
+      (let ((output (shell-command-to-string
+                     (format "%s -version 2>&1" (shell-quote-argument java-bin)))))
+        (when (string-match "version \"\\([0-9]+\\)" output)
+          (string-to-number (match-string 1 output)))))))
+
 (defun eglot-helpers-java--server-contact (_interactive)
   "Build the JDTLS server contact list with dynamic bundle paths and auto-Lombok.
 Called by Eglot each time a Java LSP server is started.  Ensures bundles
@@ -923,7 +996,18 @@ are downloaded before JDTLS launches so they can be loaded at startup."
          (lombok-arg (and lombok
                           (concat "--jvm-arg=-javaagent:"
                                   (expand-file-name lombok))))
-         (dump-dir (expand-file-name eglot-helpers-java-heap-dump-dir)))
+         (dump-dir (expand-file-name eglot-helpers-java-heap-dump-dir))
+         ;; Generational ZGC is opt-in via this flag on JDK 21-23; it became
+         ;; the only ZGC mode on JDK 24+ and the flag was removed there, so
+         ;; passing it prints "Ignoring option ZGenerational" noise on newer
+         ;; JVMs.  Only add it when jdtls's own JVM is old enough to need it.
+         (java-major (eglot-helpers-java--java-major-version))
+         (zgenerational-p (and java-major (< java-major 24)))
+         ;; Pass -data explicitly instead of letting jdtls compute its own
+         ;; default (cachedir/jdtls-<sha1>) — keeps us the source of truth
+         ;; so `eglot-helpers-java-wipe-workspace' can never target the
+         ;; wrong directory if jdtls's internal formula ever changes.
+         (data-dir (eglot-helpers-java--workspace-cache-dir)))
     (make-directory dump-dir t)
     (message "eglot-helpers-java: starting JDTLS with %d bundle(s)%s"
              (length bundles)
@@ -932,13 +1016,14 @@ are downloaded before JDTLS launches so they can be loaded at startup."
       "--jvm-arg=-Xms2G"
       "--jvm-arg=-Xmx6G"
       "--jvm-arg=-XX:+UseZGC"
-      "--jvm-arg=-XX:+ZGenerational"
+      ,@(when zgenerational-p (list "--jvm-arg=-XX:+ZGenerational"))
       ;; Exit immediately on OOM rather than thrashing — GC death-spirals
       ;; overlap in-flight workspace writes and corrupt .metadata/.
       "--jvm-arg=-XX:+ExitOnOutOfMemoryError"
       "--jvm-arg=-XX:+HeapDumpOnOutOfMemoryError"
       ,(format "--jvm-arg=-XX:HeapDumpPath=%s" dump-dir)
       ,@(when lombok-arg (list lombok-arg))
+      ,@(when data-dir (list "-data" data-dir))
       ,@(when clean (list "-clean"))
       :initializationOptions
       (:extendedClientCapabilities
