@@ -108,6 +108,21 @@ classpath resolution can take longer."
   :type 'integer
   :group 'eglot-helpers-java)
 
+(defcustom eglot-helpers-java-test-request-timeout 30
+  "Seconds to wait for the JDTLS test/debug-session commands before giving up.
+Covers `vscode.java.test.junit.argument' and
+`vscode.java.startDebugSession'. `eglot-execute's own
+`workspace/executeCommand' path hardcodes `:timeout nil', which disables
+jsonrpc.el's normal 10s default outright — these two calls would
+otherwise block Emacs's main thread indefinitely if JDTLS never answers
+(seen happening well past the old implicit default while JDTLS
+re-indexes after a restart or a newly-added test file).
+`eglot-helpers-java--test-launch-args' and
+`eglot-helpers-java--dape-via-start-debug-session' call `eglot--request'
+directly (bypassing `eglot-execute') so this value actually applies."
+  :type 'integer
+  :group 'eglot-helpers-java)
+
 (defcustom eglot-helpers-java-read-process-output-max (* 4 1024 1024)
   "Buffer-local value of `read-process-output-max' for Java buffers.
 The Emacs default (~4KB on most builds) is far too small for LSP
@@ -416,12 +431,17 @@ Returns a plist with :classpath, :mainClass, :vmArguments, :programArguments."
     (unless server
       (user-error "No active Eglot server — open a Java file first"))
     (condition-case err
-        (eglot-execute
-         server
+        ;; Call `eglot--request' directly instead of `eglot-execute' --
+        ;; the latter's `workspace/executeCommand' path hardcodes
+        ;; `:timeout nil', which would leave this request unbounded. See
+        ;; `eglot-helpers-java-test-request-timeout'.
+        (eglot--request
+         server :workspace/executeCommand
          (list :command   "vscode.java.test.junit.argument"
                :arguments (vector (list :testLevel  test-level
                                         :testNames  (vector fqcn)
-                                        :testKind   0))))
+                                        :testKind   0)))
+         :timeout eglot-helpers-java-test-request-timeout)
       (error
        (error "JDTLS test plugin unavailable: %s" (error-message-string err))))))
 
@@ -547,9 +567,14 @@ attach/launch request body — preserving the JDWP port for attach mode."
   (let* ((server (or (eglot-current-server) (user-error "No active Eglot server")))
          (debug-session
           (condition-case err
-              (eglot-execute server
-                             (list :command   "vscode.java.startDebugSession"
-                                   :arguments (vector launch-config)))
+              ;; Same reasoning as `eglot-helpers-java--test-launch-args':
+              ;; call `eglot--request' directly, not `eglot-execute' --
+              ;; its `workspace/executeCommand' path hardcodes `:timeout
+              ;; nil', which would leave this unbounded otherwise.
+              (eglot--request server :workspace/executeCommand
+                              (list :command   "vscode.java.startDebugSession"
+                                    :arguments (vector launch-config))
+                              :timeout eglot-helpers-java-test-request-timeout)
             (error
              (user-error "vscode.java.startDebugSession failed: %s"
                          (error-message-string err)))))
