@@ -389,6 +389,38 @@ Returns nil when no Lombok dependency is found or if download fails."
                      (error-message-string err))
             nil))))))))
 
+(defun eglot-helpers-java--lombok-signature-file (data-dir)
+  "Return path to the persisted Lombok-agent signature under DATA-DIR."
+  (expand-file-name ".eglot-helpers-lombok-signature" data-dir))
+
+(defun eglot-helpers-java--maybe-clean-for-lombok (data-dir lombok-jar)
+  "Force JDTLS `-clean' when the Lombok-agent state changes for DATA-DIR.
+
+JDTLS reuses the OSGi workspace at DATA-DIR across launches.  If a previous
+launch indexed the project without a `-javaagent:lombok' arg (or with a
+different Lombok JAR), the cached indices don't contain Lombok-generated
+methods and diagnostics report bogus `The method get*() is undefined for
+type X' errors on `@Getter'-annotated classes.
+
+Persist a small signature file under DATA-DIR recording the Lombok JAR
+currently in use.  When the signature changes (Lombok added, removed, or
+version bumped), set `eglot-helpers-java--clean-on-next-start' so the next
+`-server-contact' call forwards `-clean' to jdtls, purging the OSGi cache
+and forcing a re-index with the current agent state."
+  (when data-dir
+    (let* ((sig-file (eglot-helpers-java--lombok-signature-file data-dir))
+           (sig-now  (or lombok-jar ""))
+           (sig-prev (when (file-readable-p sig-file)
+                       (with-temp-buffer
+                         (insert-file-contents sig-file)
+                         (string-trim (buffer-string))))))
+      (unless (equal sig-now sig-prev)
+        (message "eglot-helpers-java: Lombok agent state changed (%s -> %s); scheduling -clean"
+                 (or sig-prev "none") (or lombok-jar "none"))
+        (setq eglot-helpers-java--clean-on-next-start t)
+        (make-directory data-dir t)
+        (with-temp-file sig-file (insert sig-now))))))
+
 
 ;;;; ─── FQCN / FQMN resolution ────────────────────────────────────────────────
 
@@ -1012,9 +1044,7 @@ before falling back to `java' on `exec-path'."
 Called by Eglot each time a Java LSP server is started.  Ensures bundles
 are downloaded before JDTLS launches so they can be loaded at startup."
   (eglot-helpers-java-ensure-bundles)
-  (let* ((clean   (prog1 eglot-helpers-java--clean-on-next-start
-                    (setq eglot-helpers-java--clean-on-next-start nil)))
-         (bundles (eglot-helpers-java--bundle-vector))
+  (let* ((bundles (eglot-helpers-java--bundle-vector))
          (project (project-current))
          (root    (and project (project-root project)))
          (lombok  (and root (eglot-helpers-java--ensure-lombok-jar root)))
@@ -1032,7 +1062,16 @@ are downloaded before JDTLS launches so they can be loaded at startup."
          ;; default (cachedir/jdtls-<sha1>) — keeps us the source of truth
          ;; so `eglot-helpers-java-wipe-workspace' can never target the
          ;; wrong directory if jdtls's internal formula ever changes.
-         (data-dir (eglot-helpers-java--workspace-cache-dir)))
+         (data-dir (eglot-helpers-java--workspace-cache-dir))
+         ;; Compare current Lombok agent state to the last one indexed into
+         ;; this workspace.  When it changes (Lombok added, removed, or JAR
+         ;; version bumped) schedule -clean so JDTLS re-indexes with the new
+         ;; agent state.  Without this, cached OSGi indices retain
+         ;; pre-Lombok class metadata and every `@Getter'-generated method
+         ;; keeps surfacing as `The method getXxx() is undefined for type X'.
+         (_ (eglot-helpers-java--maybe-clean-for-lombok data-dir lombok))
+         (clean (prog1 eglot-helpers-java--clean-on-next-start
+                  (setq eglot-helpers-java--clean-on-next-start nil))))
     (make-directory dump-dir t)
     (message "eglot-helpers-java: starting JDTLS with %d bundle(s)%s"
              (length bundles)
