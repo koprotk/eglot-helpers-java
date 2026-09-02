@@ -488,11 +488,23 @@ TEST-LEVEL: 3 = class, 4 = method."
                    (classpath (mapconcat #'identity
                                          (append (plist-get args :classpath) nil) ":"))
                    (main      (plist-get args :mainClass))
-                   (vm-args   (string-join (append (plist-get args :vmArguments) nil) " "))
-                   (prog-args (string-join (append (plist-get args :programArguments) nil) " ")))
+                   ;; Every piece here is untrusted shell text -- JDTLS-resolved
+                   ;; classpath entries, vm/program args, or the project path
+                   ;; itself can contain spaces (silently splits into extra
+                   ;; argv words) or `$' (silently expanded away by the shell,
+                   ;; e.g. in a nested/inner class's binary name Outer$Inner).
+                   ;; shell-quote-argument each token so `compile' hands the
+                   ;; shell exactly the words JDTLS gave us.
+                   (vm-args   (mapconcat #'shell-quote-argument
+                                         (append (plist-get args :vmArguments) nil) " "))
+                   (prog-args (mapconcat #'shell-quote-argument
+                                         (append (plist-get args :programArguments) nil) " ")))
               (compile (string-trim
                         (format "java %s -cp %s %s %s"
-                                vm-args classpath main prog-args))
+                                vm-args
+                                (shell-quote-argument classpath)
+                                (shell-quote-argument main)
+                                prog-args))
                        t))
           ;; Test plugin not loaded — fall back to Maven (same format as v1).
           ;; FQCN/FQMN already uses the '#' separator that Maven -Dtest= expects.
